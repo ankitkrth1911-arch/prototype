@@ -8,12 +8,12 @@ services:
     plan: free
     region: oregon
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: uvicorn backend.api:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.9
+        value: 3.12.3
       - key: GEMINI_API_KEY
         sync: false
 

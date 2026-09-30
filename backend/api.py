@@ -2,6 +2,7 @@ import os
 import json
 import csv
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -91,6 +92,21 @@ with open(gemini_explanations_path, "r", encoding="utf-8") as f:
 
 @app.get("/")
 def home():
+    index_file = os.path.join(os.path.dirname(BASE_DIR), "dist", "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
+    return {
+        "system": "BRICS Healthcare AI",
+        "status": "running",
+        "service": "Medicine Demand Forecasting + Stockout Risk",
+        "forecast_objects": len(forecast_objects),
+        "gemini_explanations": len(gemini_explanations),
+        "data_label": "Simulated"
+    }
+
+
+@app.get("/health")
+def health():
     return {
         "system": "BRICS Healthcare AI",
         "status": "running",
@@ -330,7 +346,10 @@ def get_explanation(phc: str, med: str):
     # If GEMINI_API_KEY is set, call Gemini from backend with real numbers
     if api_key:
         try:
-            from gemini_explainer import explain_risk, DEFAULT_GEMINI_MODEL
+            try:
+                from backend.gemini_explainer import explain_risk, DEFAULT_GEMINI_MODEL
+            except ImportError:
+                from gemini_explainer import explain_risk, DEFAULT_GEMINI_MODEL
             live_payload = forecast if forecast else cached_entry
             live_text = explain_risk(
                 phc_id=live_payload["phc_id"],
