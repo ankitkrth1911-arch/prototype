@@ -15,7 +15,8 @@ import { adaptForecastObjects } from './backendAdapter';
 import type { PHCNodeData, RiskRadarItem } from '../types/decision';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
-const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '').replace(/\/$/, '');
+const rawApiBase = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '').trim().replace(/\/$/, '');
+const API_BASE = rawApiBase ? (rawApiBase.startsWith('http://') || rawApiBase.startsWith('https://') ? rawApiBase : `https://${rawApiBase}`) : '';
 const LIVE = Boolean(API_BASE);
 
 export const isOfflineMode = () => !LIVE;

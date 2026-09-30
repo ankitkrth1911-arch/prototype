@@ -1,0 +1,40 @@
+services:
+  # ============================================================
+  # 1. FastAPI Python Backend Service
+  # ============================================================
+  - type: web
+    name: sanjeevani-api
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: GEMINI_API_KEY
+        sync: false
+
+  # ============================================================
+  # 2. React + Vite Frontend Static Site
+  # ============================================================
+  - type: web
+    name: sanjeevani-frontend
+    runtime: static
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    autoDeploy: true
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_BASE_URL
+        fromService:
+          type: web
+          name: sanjeevani-api
+          property: host

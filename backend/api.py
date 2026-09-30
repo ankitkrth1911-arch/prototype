@@ -15,15 +15,21 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Allow frontend dev servers
+# Allow frontend dev servers and deployed origins
+allowed_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+frontend_env = os.getenv("FRONTEND_URL")
+if frontend_env:
+    allowed_origins.append(frontend_env.rstrip("/"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.onrender\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
