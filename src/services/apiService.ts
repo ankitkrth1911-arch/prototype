@@ -15,11 +15,20 @@ import { adaptForecastObjects } from './backendAdapter';
 import type { PHCNodeData, RiskRadarItem } from '../types/decision';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
-const rawApiBase = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '').trim().replace(/\/$/, '');
-const API_BASE = rawApiBase ? (rawApiBase.startsWith('http://') || rawApiBase.startsWith('https://') ? rawApiBase : `https://${rawApiBase}`) : '';
-const LIVE = Boolean(API_BASE);
+// Supports VITE_API_URL or VITE_API_BASE_URL; defaults to "" in production (same domain)
+const rawApiUrl = (
+  (import.meta.env.VITE_API_URL as string | undefined) ??
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
+  ''
+).trim().replace(/\/$/, '');
 
-export const isOfflineMode = () => !LIVE;
+// Form API base path: in same domain or with Vite proxy, use relative /api
+export const API_BASE = rawApiUrl
+  ? (rawApiUrl.startsWith('http://') || rawApiUrl.startsWith('https://') ? `${rawApiUrl}/api` : `https://${rawApiUrl}/api`)
+  : '/api';
+
+let liveConnectionActive = true;
+export const isOfflineMode = () => !liveConnectionActive;
 
 // ─── Raw backend types (what FastAPI returns) ───────────────────────────────
 export interface BackendForecast {
@@ -86,13 +95,18 @@ export interface BackendExplanation {
 }
 
 // ─── Fetch helper with timeout ──────────────────────────────────────────────
-async function apiFetch<T>(path: string, timeoutMs = 5000): Promise<T> {
+async function apiFetch<T>(path: string, timeoutMs = 6000): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   try {
-    const res = await fetch(`${API_BASE}${path}`, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${path}`);
+    const res = await fetch(`${API_BASE}${normalizedPath}`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${API_BASE}${normalizedPath}`);
+    liveConnectionActive = true;
     return (await res.json()) as T;
+  } catch (err) {
+    liveConnectionActive = false;
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -108,14 +122,12 @@ export async function fetchHealth(): Promise<{
   gemini_explanations: number;
   data_label: string;
 } | null> {
-  if (LIVE) {
-    try {
-      return await apiFetch('/');
-    } catch (err) {
-      console.warn('[apiService] / health check failed:', err);
-    }
+  try {
+    return await apiFetch('/status');
+  } catch (err) {
+    console.warn('[apiService] /api/status health check failed:', err);
+    return null;
   }
-  return null;
 }
 
 /** All 15 forecast objects — returns adapted frontend shapes + data label. */
@@ -126,18 +138,17 @@ export async function fetchAllForecasts(): Promise<{
   isLive: boolean;
   dataLabel: string;
 }> {
-  if (LIVE) {
-    try {
-      const data = await apiFetch<BackendForecastsResponse>('/forecasts');
-      const { phcList, riskList } = adaptForecastObjects(data.forecasts);
-      const label = data.data_label.toLowerCase().includes('simulated')
-        ? 'Simulated data'
-        : `${data.data_label} data`;
-      return { phcList, riskList, rawForecasts: data.forecasts, isLive: true, dataLabel: label };
-    } catch (err) {
-      console.warn('[apiService] /forecasts failed, using offline fallback:', err);
-    }
+  try {
+    const data = await apiFetch<BackendForecastsResponse>('/forecasts');
+    const { phcList, riskList } = adaptForecastObjects(data.forecasts);
+    const label = data.data_label.toLowerCase().includes('simulated')
+      ? 'Simulated data'
+      : `${data.data_label} data`;
+    return { phcList, riskList, rawForecasts: data.forecasts, isLive: true, dataLabel: label };
+  } catch (err) {
+    console.warn('[apiService] /api/forecasts failed, using offline fallback:', err);
   }
+
   // Offline fallback — import lazily to avoid circular deps
   const { SEEDED_PHC_NODES, SEEDED_RISK_RADAR } = await import('./decisionService');
   return {
@@ -153,15 +164,13 @@ export async function fetchForecast(
   phcId: string,
   medicineId: string
 ): Promise<{ data: BackendForecast | null; isLive: boolean }> {
-  if (LIVE) {
-    try {
-      const data = await apiFetch<BackendForecast>(`/forecast/${phcId}/${medicineId}`);
-      return { data, isLive: true };
-    } catch (err) {
-      console.warn(`[apiService] /forecast/${phcId}/${medicineId} failed:`, err);
-    }
+  try {
+    const data = await apiFetch<BackendForecast>(`/forecast/${phcId}/${medicineId}`);
+    return { data, isLive: true };
+  } catch (err) {
+    console.warn(`[apiService] /api/forecast/${phcId}/${medicineId} failed:`, err);
+    return { data: null, isLive: false };
   }
-  return { data: null, isLive: false };
 }
 
 /** Risk distribution across network. */
@@ -169,15 +178,13 @@ export async function fetchRiskSummary(): Promise<{
   data: BackendRiskSummary | null;
   isLive: boolean;
 }> {
-  if (LIVE) {
-    try {
-      const data = await apiFetch<BackendRiskSummary>('/risk-summary');
-      return { data, isLive: true };
-    } catch (err) {
-      console.warn('[apiService] /risk-summary failed:', err);
-    }
+  try {
+    const data = await apiFetch<BackendRiskSummary>('/risk-summary');
+    return { data, isLive: true };
+  } catch (err) {
+    console.warn('[apiService] /api/risk-summary failed:', err);
+    return { data: null, isLive: false };
   }
-  return { data: null, isLive: false };
 }
 
 /** Model comparison metrics from model_comparison.csv via backend. */
@@ -185,15 +192,13 @@ export async function fetchMetrics(): Promise<{
   data: BackendMetricsResponse | null;
   isLive: boolean;
 }> {
-  if (LIVE) {
-    try {
-      const data = await apiFetch<BackendMetricsResponse>('/metrics');
-      return { data, isLive: true };
-    } catch (err) {
-      console.warn('[apiService] /metrics failed:', err);
-    }
+  try {
+    const data = await apiFetch<BackendMetricsResponse>('/metrics');
+    return { data, isLive: true };
+  } catch (err) {
+    console.warn('[apiService] /api/metrics failed:', err);
+    return { data: null, isLive: false };
   }
-  return { data: null, isLive: false };
 }
 
 /** Fetch explanation for specific PHC + medicine from backend /explain/{phc}/{med}. */
@@ -201,17 +206,15 @@ export async function fetchExplanation(
   phcId: string,
   medicineId: string
 ): Promise<{ data: BackendExplanation | null; isLive: boolean }> {
-  if (LIVE) {
-    try {
-      const data = await apiFetch<BackendExplanation>(
-        `/explain/${encodeURIComponent(phcId)}/${encodeURIComponent(medicineId)}`
-      );
-      return { data, isLive: true };
-    } catch (err) {
-      console.warn(`[apiService] /explain/${phcId}/${medicineId} failed:`, err);
-    }
+  try {
+    const data = await apiFetch<BackendExplanation>(
+      `/explain/${encodeURIComponent(phcId)}/${encodeURIComponent(medicineId)}`
+    );
+    return { data, isLive: true };
+  } catch (err) {
+    console.warn(`[apiService] /api/explain/${phcId}/${medicineId} failed:`, err);
+    return { data: null, isLive: false };
   }
-  return { data: null, isLive: false };
 }
 
 export const apiService = {

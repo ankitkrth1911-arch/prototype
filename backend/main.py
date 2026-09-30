@@ -3,55 +3,81 @@ backend/main.py — Main ASGI application entrypoint for Render and production d
 
 Provides:
   - app: FastAPI application instance (from backend.api)
-  - Full-stack support: serves Vite frontend from dist/ when built
+  - Static file mounting: serves Vite frontend from dist/ when built
+  - SPA catch-all routing for client-side navigation
 """
 
 import os
 import sys
+import logging
+from pathlib import Path
 
-# Ensure repository root and backend directory are in sys.path
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(BASE_DIR)
-
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
-
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import Request
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 
-# Import the core FastAPI app from backend.api
+logger = logging.getLogger("uvicorn.error")
+
+# Determine paths relative to this file (not the working directory)
+MAIN_FILE = Path(__file__).resolve()
+BASE_DIR = MAIN_FILE.parent  # backend/
+REPO_ROOT = BASE_DIR.parent  # repository root
+
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+# Import core FastAPI app with /api routes from backend.api
 try:
     from backend.api import app
 except ImportError:
     from api import app
 
-# Mount built frontend from dist/ if it exists (for full-stack deployment on Render)
-dist_dir = os.path.join(REPO_ROOT, "dist")
-if os.path.exists(dist_dir):
-    assets_dir = os.path.join(dist_dir, "assets")
-    if os.path.exists(assets_dir):
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+DIST_DIR = REPO_ROOT / "dist"
+INDEX_FILE = DIST_DIR / "index.html"
+ASSETS_DIR = DIST_DIR / "assets"
 
+# Check if dist/ folder exists
+if DIST_DIR.exists() and INDEX_FILE.exists():
+    if ASSETS_DIR.exists():
+        app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
+        logger.info(f"[main.py] Mounted assets folder from {ASSETS_DIR}")
+
+    # Catch-all route registered AFTER all API routes for SPA routing and refresh
     @app.get("/{full_path:path}")
-    async def serve_spa_fallback(full_path: str):
-        # Do not intercept API or documentation routes
-        reserved = ["forecasts", "risk-summary", "metrics", "health", "docs", "openapi.json", "redoc"]
-        if full_path in reserved or full_path.startswith("forecast/"):
-            return JSONResponse(status_code=404, content={"detail": f"Route '{full_path}' not found"})
+    async def serve_spa(request: Request, full_path: str):
+        # Do not intercept any API or docs paths
+        if (
+            full_path.startswith("api")
+            or full_path in ["health", "docs", "openapi.json", "redoc"]
+            or full_path.startswith("forecast/")
+            or full_path in ["forecasts", "risk-summary", "metrics"]
+        ):
+            return JSONResponse(status_code=404, content={"detail": f"Not Found: /{full_path}"})
 
-        # If a specific static file was requested (e.g. vite.svg, favicon.ico)
-        file_path = os.path.join(dist_dir, full_path)
-        if full_path and os.path.isfile(file_path):
-            return FileResponse(file_path)
+        # If a specific static file directly in dist exists (e.g., favicon.ico, vite.svg)
+        target_file = DIST_DIR / full_path
+        if full_path and target_file.is_file():
+            return FileResponse(str(target_file))
 
-        # Fallback to SPA index.html for client-side routing
-        index_file = os.path.join(dist_dir, "index.html")
-        if os.path.exists(index_file):
-            return FileResponse(index_file)
+        # SPA fallback: return index.html for client-side routes (and root "/")
+        return FileResponse(str(INDEX_FILE))
+else:
+    logger.warning(
+        f"[main.py] WARNING: Frontend dist folder not found at '{DIST_DIR}'. "
+        "The frontend UI will not be served. Ensure the Build Command runs 'npm install && npm run build'."
+    )
 
-        return JSONResponse(status_code=404, content={"detail": "Index file not found"})
+    @app.get("/")
+    def root_build_missing():
+        return {
+            "system": "BRICS Healthcare AI",
+            "status": "warning",
+            "message": "Frontend build not found at dist/. Please ensure your build command runs 'npm install && npm run build'.",
+            "api_status": "/api/status",
+            "health": "/health"
+        }
 
 if __name__ == "__main__":
     import uvicorn

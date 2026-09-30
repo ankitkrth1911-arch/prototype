@@ -1,8 +1,7 @@
 import os
 import json
 import csv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -15,6 +14,8 @@ app = FastAPI(
     description="Medicine Demand Forecasting and Stockout Risk API (Federated Health Resilience)",
     version="2.0.0"
 )
+
+api_router = APIRouter(prefix="/api", tags=["api"])
 
 # Allow frontend dev servers and deployed origins
 allowed_origins = [
@@ -87,14 +88,11 @@ with open(gemini_explanations_path, "r", encoding="utf-8") as f:
 
 
 # ============================================================
-# 1. HOME / HEALTH
+# 1. API STATUS / HEALTH
 # ============================================================
 
-@app.get("/")
-def home():
-    index_file = os.path.join(os.path.dirname(BASE_DIR), "dist", "index.html")
-    if os.path.exists(index_file):
-        return FileResponse(index_file)
+@api_router.get("/status")
+def api_status():
     return {
         "system": "BRICS Healthcare AI",
         "status": "running",
@@ -105,23 +103,16 @@ def home():
     }
 
 
-@app.get("/health")
-def health():
-    return {
-        "system": "BRICS Healthcare AI",
-        "status": "running",
-        "service": "Medicine Demand Forecasting + Stockout Risk",
-        "forecast_objects": len(forecast_objects),
-        "gemini_explanations": len(gemini_explanations),
-        "data_label": "Simulated"
-    }
+@api_router.get("/health")
+def api_health():
+    return api_status()
 
 
 # ============================================================
 # 2. GET ALL FORECASTS
 # ============================================================
 
-@app.get("/forecasts")
+@api_router.get("/forecasts")
 def get_forecasts():
     return {
         "count": len(forecast_objects),
@@ -134,7 +125,7 @@ def get_forecasts():
 # 3. GET SPECIFIC PHC + MEDICINE FORECAST
 # ============================================================
 
-@app.get("/forecast/{phc_id}/{medicine_id}")
+@api_router.get("/forecast/{phc_id}/{medicine_id}")
 def get_forecast(phc_id: str, medicine_id: str):
     # Case-insensitive lookup
     forecast = None
@@ -195,7 +186,7 @@ def get_forecast(phc_id: str, medicine_id: str):
 # 4. GET RISK SUMMARY
 # ============================================================
 
-@app.get("/risk-summary")
+@api_router.get("/risk-summary")
 def risk_summary():
     summary = {
         "LOW": 0,
@@ -219,7 +210,7 @@ def risk_summary():
 # 5. GET MODEL METRICS (from model_comparison.csv)
 # ============================================================
 
-@app.get("/metrics")
+@api_router.get("/metrics")
 def get_metrics():
     metrics_path = os.path.join(BASE_DIR, "model_comparison.csv")
     if not os.path.exists(metrics_path):
@@ -279,7 +270,7 @@ def normalize_medicine_id(med_id: str) -> str:
 # 6. GET /explain/{phc}/{med} - EXPLAINABLE AI (GEMINI OR CACHED)
 # ============================================================
 
-@app.get("/explain/{phc}/{med}")
+@api_router.get("/explain/{phc}/{med}")
 def get_explanation(phc: str, med: str):
     """
     Get explanation for a specific PHC and medicine.
@@ -410,3 +401,21 @@ def get_explanation(phc: str, med: str):
         "expected_shortage": shortage,
         "data_label": "Simulated"
     }
+
+
+# ============================================================
+# MOUNT ROUTERS
+# ============================================================
+
+# Mount /api routes
+app.include_router(api_router)
+
+# Also mount on un-prefixed routes for backward-compatibility with direct testing
+legacy_router = APIRouter()
+legacy_router.include_router(api_router, prefix="", include_in_schema=False)
+app.include_router(legacy_router)
+
+
+@app.get("/health")
+def root_health():
+    return api_status()
